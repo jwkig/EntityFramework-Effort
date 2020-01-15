@@ -43,7 +43,7 @@ namespace Effort.CsvTool.ViewModels
 
         public string Name 
         { 
-            get { return this.name; } 
+            get { return name; } 
         }
 
 
@@ -51,9 +51,9 @@ namespace Effort.CsvTool.ViewModels
         {
             if (providerFactory == null)
             {
-                Type factoryType = Type.GetType(type);
+                var factoryType = Type.GetType(type);
 
-                FieldInfo instanceProvider = factoryType.GetField("Instance");
+                var instanceProvider = factoryType.GetField("Instance");
 
                 providerFactory = instanceProvider.GetValue(null) as DbProviderFactory;
             }

@@ -22,6 +22,10 @@
 // </copyright>
 // ----------------------------------------------------------------------------------
 
+using System.Net.Mime;
+using System.Text;
+using System.Windows;
+
 namespace Effort.CsvTool.ViewModels
 {
     using System;
@@ -37,35 +41,36 @@ namespace Effort.CsvTool.ViewModels
 
     public class MainViewModel : ViewModelBase
     {
-        private ObservableCollection<ProviderViewModel> providers;
-        private ICommand exportCommand;
+        private ObservableCollection<ProviderViewModel> _providers;
+        private ICommand _exportCommand;
 
-        private ProviderViewModel selectedProvider;
-        private DbConnectionStringBuilder connectionStringBuilder;
-        private int reportProgress;
+        private ProviderViewModel _selectedProvider;
+        private DbConnectionStringBuilder _connectionStringBuilder;
+        private int _reportProgress;
+        private string _statusText;
 
-        private BackgroundWorker worker;
+        private BackgroundWorker _worker;
 
         public MainViewModel()
         {
-            this.providers = new ObservableCollection<ProviderViewModel>();
+            _providers = new ObservableCollection<ProviderViewModel>();
 
             foreach (DataRow item in DbProviderFactories.GetFactoryClasses().Rows)
             {
-                this.providers.Add(new ProviderViewModel((string)item["Name"], (string)item["AssemblyQualifiedName"]));
+                _providers.Add(new ProviderViewModel((string)item["Name"], (string)item["AssemblyQualifiedName"]));
             }
 
-            this.worker = new BackgroundWorker();
+            _worker = new BackgroundWorker();
 
-            this.worker.WorkerReportsProgress = true;
-            this.worker.DoWork += new DoWorkEventHandler(worker_DoWork);
-            this.worker.ProgressChanged += new ProgressChangedEventHandler(worker_ProgressChanged);
-            this.worker.RunWorkerCompleted += new RunWorkerCompletedEventHandler(worker_RunWorkerCompleted);
+            _worker.WorkerReportsProgress = true;
+            _worker.DoWork += new DoWorkEventHandler(worker_DoWork);
+            _worker.ProgressChanged += new ProgressChangedEventHandler(worker_ProgressChanged);
+            _worker.RunWorkerCompleted += new RunWorkerCompletedEventHandler(worker_RunWorkerCompleted);
 
-            this.SelectedProvider = this.providers.FirstOrDefault();
-            this.exportCommand = new RelayCommand(Export);
+            SelectedProvider = _providers.FirstOrDefault();
+            _exportCommand = new RelayCommand(Export);
 
-            this.ExportPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+            ExportPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
         }
 
 
@@ -73,7 +78,7 @@ namespace Effort.CsvTool.ViewModels
         {
             get 
             { 
-                return this.providers; 
+                return _providers; 
             }
         }
 
@@ -81,12 +86,12 @@ namespace Effort.CsvTool.ViewModels
         {
             get
             {
-                return this.selectedProvider;
+                return _selectedProvider;
             }
             set
             {
-                this.selectedProvider = value;
-                this.SetupProperties();
+                _selectedProvider = value;
+                SetupProperties();
             }
         }
 
@@ -94,12 +99,12 @@ namespace Effort.CsvTool.ViewModels
         { 
             get 
             { 
-                return this.connectionStringBuilder; 
+                return _connectionStringBuilder; 
             }
             set
             {
-                this.connectionStringBuilder = value;
-                base.NotifyChanged("ConnectionStringBuilder");
+                _connectionStringBuilder = value;
+                NotifyChanged(nameof(ConnectionStringBuilder));
             }
         }
 
@@ -107,24 +112,34 @@ namespace Effort.CsvTool.ViewModels
 
         public int ReportProgress 
         {
-            get { return this.reportProgress; }
+            get { return _reportProgress; }
             set 
             {
-                this.reportProgress = value;
-                base.NotifyChanged("ReportProgress");
+                _reportProgress = value;
+                NotifyChanged(nameof(ReportProgress));
+            }
+        }
+
+        public string StatusText
+        {
+            get => _statusText;
+            set
+            {
+                _statusText = value;
+                NotifyChanged(nameof(StatusText));
             }
         }
 
 
         public ICommand ExportCommand
         {
-            get { return this.exportCommand; }
+            get { return _exportCommand; }
         }
 
 
         private void SetupProperties()
         {
-            ProviderViewModel provider = this.SelectedProvider;
+            var provider = SelectedProvider;
 
             if (provider == null)
             {
@@ -134,12 +149,12 @@ namespace Effort.CsvTool.ViewModels
             var factory = provider.GetProviderFactory();
             var connectionStringBuilder = factory.CreateConnectionStringBuilder();
 
-            this.ConnectionStringBuilder = connectionStringBuilder;
+            ConnectionStringBuilder = connectionStringBuilder;
         }
 
         private void Export(object arg)
         {
-            ProviderViewModel provider = this.SelectedProvider;
+            var provider = SelectedProvider;
 
             if (provider == null)
             {
@@ -150,15 +165,15 @@ namespace Effort.CsvTool.ViewModels
 
             var connection = factory.CreateConnection();
 
-            connection.ConnectionString = this.ConnectionStringBuilder.ConnectionString;
+            connection.ConnectionString = ConnectionStringBuilder.ConnectionString;
 
-            WorkerArgs args = new WorkerArgs()
+            var args = new WorkerArgs()
             {
                 Connection = connection,
-                ExportPath = this.ExportPath
+                ExportPath = ExportPath
             };
 
-            this.worker.RunWorkerAsync(args);
+            _worker.RunWorkerAsync(args);
         }
 
 
@@ -168,12 +183,33 @@ namespace Effort.CsvTool.ViewModels
             public string ExportPath { get; set; }
         }
 
+        private class WorkerResults
+        {
+            public StringBuilder Log { get; set; }
+        }
+
+        private class WorkerProgress
+        {
+            public string TableName { get; set; }
+            public long CurrentRow { get; set; }
+            public long TotalRows { get; set; }
+        }
 
         private void worker_DoWork(object sender, DoWorkEventArgs e)
         {
-            WorkerArgs args = e.Argument as WorkerArgs;
+            var args = e.Argument as WorkerArgs;
             var con = args.Connection;
             var dir = new DirectoryInfo(args.ExportPath);
+            var orConType = Type.GetType("System.Data.OracleClient.OracleConnection, System.Data.OracleClient, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089");
+
+            var isOracle = con.GetType() == orConType;
+
+            var log = new StringBuilder();
+
+            var results = new WorkerResults() {Log = log};
+            e.Result = results;
+
+            var progress = new WorkerProgress();
 
             using(new CultureScope(CultureInfo.InvariantCulture))
             using (con)
@@ -182,57 +218,90 @@ namespace Effort.CsvTool.ViewModels
 
                 var schema = con.GetSchema("Tables");
 
-                Dictionary<string, List<string>> tables = new Dictionary<string, List<string>>();
+                var tables = new Dictionary<string, List<string>>();
                 //List<string> tables = new List<string>();
 
                 foreach (DataRow item in schema.Rows)
                 {
-                    if (item[3].Equals("BASE TABLE"))
+                    if (isOracle)
                     {
-                        string schemaName = item[1] as string;
-                        string name = item[2] as string;
-                        
-                        if (!tables.ContainsKey(schemaName))
+                        if (item[2].Equals("User"))
                         {
-                            tables.Add(schemaName, new List<string>());
+                            var schemaName = item[0] as string;
+                            var name = item[1] as string;
+                            if (!tables.ContainsKey(schemaName))
+                            {
+                                tables.Add(schemaName, new List<string>());
+                            }
+                            tables[schemaName].Add(name);
                         }
+                    }
+                    else
+                    {
+                        if (item[3].Equals("BASE TABLE"))
+                        {
+                            var schemaName = item[1] as string;
+                            var name = item[2] as string;
 
-                        tables[schemaName].Add(name);
+                            if (!tables.ContainsKey(schemaName))
+                            {
+                                tables.Add(schemaName, new List<string>());
+                            }
+
+                            tables[schemaName].Add(name);
+                        }
                     }
                 }
                 foreach (var schemaName in tables.Keys)
                 {
-                    for (int j = 0; j < tables[schemaName].Count; j++)
+                    for (var j = 0; j < tables[schemaName].Count; j++)
                     {
-                        int rowCount = 0;
-                        string name = tables[schemaName][j];
-
-                        using (DbCommand cmd = con.CreateCommand())
+                        var rowCount = 0;
+                        var totalCount = 0;
+                        var name = tables[schemaName][j];
+                        progress.TableName = $"{schemaName}.{name}";
+                        progress.CurrentRow = 0;
+                        using (var cmd = con.CreateCommand())
                         {
-                            cmd.CommandText = string.Format("SELECT * FROM [{0}].[{1}]", schemaName, name);
+                            cmd.CommandText =
+                                $"SELECT COUNT(*) FROM {(isOracle ? "\"" : "[")}{schemaName}{(isOracle ? "\"" : "]")}.{(isOracle ? "\"" : "[")}{name}{(isOracle ? "\"" : "]")}";
+                            cmd.CommandType = CommandType.Text;
+                            using (var reader = cmd.ExecuteReader())
+                            {
+                                if (reader.Read())
+                                {
+                                    totalCount = reader.GetInt32(0);
+                                }
+                            }
+                        }
+
+                        progress.TotalRows = totalCount;
+                        using (var cmd = con.CreateCommand())
+                        {
+                            cmd.CommandText = $"SELECT * FROM {(isOracle ? "\"":"[")}{schemaName}{(isOracle ? "\"":"]")}.{(isOracle ? "\"":"[")}{name}{(isOracle ? "\"":"]")}";
                             cmd.CommandType = CommandType.Text;
 
-							FileInfo file = new FileInfo(Path.Combine(dir.FullName, string.Format("{0}.{1}.csv", schemaName, name)));
+							var file = new FileInfo(Path.Combine(dir.FullName, $"{schemaName}.{name}.csv"));
 
                             if (!dir.Exists)
                             {
                                 dir.Create();
                             }
 
-                            using (DbDataReader reader = cmd.ExecuteReader())
-                            using (StreamWriter sw = new StreamWriter(file.Open(FileMode.Create, FileAccess.Write, FileShare.None)))
+                            using (var reader = cmd.ExecuteReader())
+                            using (var sw = new StreamWriter(file.Open(FileMode.Create, FileAccess.Write, FileShare.None)))
                             {
-                                int fieldCount = reader.FieldCount;
+                                var fieldCount = reader.FieldCount;
 
-                                string[] fieldNames = new string[fieldCount];
-                                Func<object, string>[] serializers = new Func<object, string>[fieldCount];
-                                bool[] typeNeedQuote = new bool[fieldCount];
+                                var fieldNames = new string[fieldCount];
+                                var serializers = new Func<object, string>[fieldCount];
+                                var typeNeedQuote = new bool[fieldCount];
 
-                                for (int i = 0; i < fieldCount; i++)
+                                for (var i = 0; i < fieldCount; i++)
                                 {
                                     fieldNames[i] = reader.GetName(i);
 
-                                    Type fieldType = reader.GetFieldType(i);
+                                    var fieldType = reader.GetFieldType(i);
 
                                     if (fieldType == typeof(Byte[]))
                                     {
@@ -255,43 +324,52 @@ namespace Effort.CsvTool.ViewModels
 
                                 sw.WriteLine(string.Join(",", fieldNames));
 
-                                object[] values = new object[fieldCount];
-                                string[] serializedValues = new string[fieldCount];
-                                bool[] addQuote = new bool[fieldCount];
+                                var values = new object[fieldCount];
+                                var serializedValues = new string[fieldCount];
+                                var addQuote = new bool[fieldCount];
 
                                 while (reader.Read())
                                 {
-                                    rowCount++;
-                                    reader.GetValues(values);
-
-                                    for (int i = 0; i < fieldCount; i++)
+                                    try
                                     {
-                                        object value = values[i];
+                                        rowCount++;
+                                        progress.CurrentRow = rowCount;
+                                        reader.GetValues(values);
 
-                                        // Check if null
-                                        if (value == null || value is DBNull)
+                                        for (var i = 0; i < fieldCount; i++)
                                         {
-                                            addQuote[i] = false;
-                                            serializedValues[i] = "";
-                                        }
-                                        else
-                                        {
-                                            addQuote[i] = typeNeedQuote[i];
-                                            serializedValues[i] = serializers[i](value);
-                                        }
-                                    }
+                                            var value = values[i];
 
-                                    {
-                                        int i = 0;
-                                        for (; i < fieldCount - 1; i++)
+                                            // Check if null
+                                            if (value == null || value is DBNull)
+                                            {
+                                                addQuote[i] = false;
+                                                serializedValues[i] = "";
+                                            }
+                                            else
+                                            {
+                                                addQuote[i] = typeNeedQuote[i];
+                                                serializedValues[i] = serializers[i](value);
+                                            }
+                                        }
+
                                         {
+                                            var i = 0;
+                                            for (; i < fieldCount - 1; i++)
+                                            {
+                                                AppendField(sw, serializedValues[i], addQuote[i]);
+
+                                                sw.Write(',');
+                                            }
+
                                             AppendField(sw, serializedValues[i], addQuote[i]);
-
-                                            sw.Write(',');
+                                            sw.WriteLine();
                                         }
-
-                                        AppendField(sw, serializedValues[i], addQuote[i]);
-                                        sw.WriteLine();
+                                        _worker.ReportProgress((int)((j + 1) * 100.0 / tables[schemaName].Count), progress);
+                                    }
+                                    catch (Exception exception)
+                                    {
+                                        log.AppendLine($"{DateTime.Now.ToString()} - Table '{schemaName}.{name}', row {rowCount},  Error ({exception.Message})");
                                     }
 
                                 }
@@ -306,7 +384,7 @@ namespace Effort.CsvTool.ViewModels
                             // Command is finished
                         }
 
-                        this.worker.ReportProgress((int)((j + 1) * 100.0 / tables[schemaName].Count));
+                        _worker.ReportProgress((int)((j + 1) * 100.0 / tables[schemaName].Count));
 
                         // Table is finished
                     }
@@ -319,7 +397,7 @@ namespace Effort.CsvTool.ViewModels
 
         private static void AppendField(StreamWriter sw, string value, bool addQuote)
         {
-            string append = ConvertToCsv(value);
+            var append = ConvertToCsv(value);
 
             if (addQuote)
             {
@@ -347,7 +425,7 @@ namespace Effort.CsvTool.ViewModels
 
         private static string BinarySerializer(object input)
         {
-            byte[] bin = input as byte[];
+            var bin = input as byte[];
 
             return Convert.ToBase64String(bin);
         }
@@ -355,12 +433,24 @@ namespace Effort.CsvTool.ViewModels
 
         private void worker_ProgressChanged(object sender, ProgressChangedEventArgs e)
         {
-            this.ReportProgress = e.ProgressPercentage;
+            var progress = e.UserState as WorkerProgress;
+            if (progress != null)
+            {
+                StatusText = $"Working '{progress.TableName}' row {progress.CurrentRow} of {progress.TotalRows}";
+            }
+            ReportProgress = e.ProgressPercentage;
         }
 
         private void worker_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
-            this.ReportProgress = 0;
+            ReportProgress = 0;
+            if (e.Error != null)
+            {
+                MessageBox.Show(e.Error.ToString(), "Ошибка");
+            }
+
+            var result = e.Result as WorkerResults;
+            Console.Write(result.Log.ToString());
         }
     }
 

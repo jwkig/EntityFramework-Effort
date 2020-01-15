@@ -34,13 +34,13 @@ namespace Effort.CsvTool
 
         public CultureScope(CultureInfo cultureInfo)
         {
-            this.original = Thread.CurrentThread.CurrentCulture;
+            original = Thread.CurrentThread.CurrentCulture;
             Thread.CurrentThread.CurrentCulture = cultureInfo;
         }
 
         public void Dispose()
         {
-            Thread.CurrentThread.CurrentCulture = this.original;
+            Thread.CurrentThread.CurrentCulture = original;
         }
     }
 }
