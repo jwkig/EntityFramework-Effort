@@ -23,6 +23,7 @@
 // ----------------------------------------------------------------------------------
 
 using System.Net.Mime;
+using System.Reflection;
 using System.Text;
 using System.Windows;
 
@@ -202,7 +203,17 @@ namespace Effort.CsvTool.ViewModels
             var dir = new DirectoryInfo(args.ExportPath);
             var orConType = Type.GetType("System.Data.OracleClient.OracleConnection, System.Data.OracleClient, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089");
 
-            var isOracle = con.GetType() == orConType;
+            var conType = con.GetType();
+            var isOracle = conType == orConType;
+            var userId = string.Empty;
+            if (isOracle)
+            {
+                var conOptions = con.ConnectionString.Split(';').Select(pair => pair.Split('='))
+                    .ToDictionary(p => p.First().ToUpper(), p => p.Last());
+                var userIdKey = "USER ID";
+                if(conOptions.ContainsKey(userIdKey))
+                    userId = conOptions[userIdKey];
+            }
 
             var log = new StringBuilder();
 
@@ -228,6 +239,8 @@ namespace Effort.CsvTool.ViewModels
                         if (item[2].Equals("User"))
                         {
                             var schemaName = item[0] as string;
+                            if(!schemaName.Equals(userId, StringComparison.OrdinalIgnoreCase))
+                                continue;
                             var name = item[1] as string;
                             if (!tables.ContainsKey(schemaName))
                             {
@@ -296,12 +309,15 @@ namespace Effort.CsvTool.ViewModels
                                 var fieldNames = new string[fieldCount];
                                 var serializers = new Func<object, string>[fieldCount];
                                 var typeNeedQuote = new bool[fieldCount];
+                                var sTable = reader.GetSchemaTable();
 
                                 for (var i = 0; i < fieldCount; i++)
                                 {
                                     fieldNames[i] = reader.GetName(i);
 
                                     var fieldType = reader.GetFieldType(i);
+                                    var fieldTypeName = reader.GetDataTypeName(i);
+                                    var fieldPsType = reader.GetProviderSpecificFieldType(i);
 
                                     if (fieldType == typeof(Byte[]))
                                     {
@@ -312,6 +328,29 @@ namespace Effort.CsvTool.ViewModels
                                     {
                                         serializers[i] = DefaultSerializer;
                                         typeNeedQuote[i] = true;
+                                    }
+                                    else if (fieldType == typeof(bool))
+                                    {
+                                        serializers[i] = BooleanSerializer;
+                                        typeNeedQuote[i] = false;
+                                    }
+                                    else if (fieldType == typeof(decimal) &&
+                                             fieldTypeName.Equals("number", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        serializers[i] = DefaultSerializer;
+                                        typeNeedQuote[i] = false;
+
+                                        // посмотрим в табличку со схемой и оценим размер поля
+                                        var row = sTable.AsEnumerable()
+                                            .FirstOrDefault(r => r.Field<string>("ColumnName") == fieldNames[i]);
+                                        if (row != null)
+                                        {
+                                            if (row.Field<short>("NumericPrecision") == 1)
+                                            {
+                                                serializers[i] = BooleanSerializer;
+                                                typeNeedQuote[i] = false;
+                                            }
+                                        }
                                     }
                                     else
                                     {
@@ -429,6 +468,24 @@ namespace Effort.CsvTool.ViewModels
 
             return Convert.ToBase64String(bin);
         }
+
+        private static string BooleanSerializer(object input)
+        {
+            var result = string.Empty;
+            try
+            {
+                if (input != null)
+                {
+                    result = "false";
+                    result = Convert.ToBoolean(input).ToString();
+                }
+            }
+            catch // тут просто глотаем исключения, и возвращаем пустую строку,
+            {
+            }
+            return result;
+        }
+
 
 
         private void worker_ProgressChanged(object sender, ProgressChangedEventArgs e)
